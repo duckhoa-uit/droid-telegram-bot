@@ -63,6 +63,7 @@ active_session_per_user = {}  # user_id -> {session_id, cwd, last_msg_id} - fall
 pending_permissions = {}  # request_id -> {user_message, session_id, cwd, user_id, chat_id, original_msg_id}
 session_history = []  # List of all sessions with metadata for /session command
 session_autonomy = {}  # session_id -> "low"|"medium"|"high"|"unsafe" (default: off)
+active_processes = {}  # user_id -> {"process": Process, "status_msg": Message} - for /stop command
 
 # Context to prepend to messages so droid knows about bot features
 BOT_CONTEXT = """[Telegram Bot Context: You're running inside a Telegram bot. The user can use /new <path> to change the working directory for their session (e.g., /new ~/projects/myapp). Don't suggest using cd to change directories - instead tell them to use /new <path>.]
@@ -325,7 +326,7 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             if streaming_mode:
-                response, session_id = await handle_message_streaming(prompt, None, status_msg, resolved_cwd)
+                response, session_id = await handle_message_streaming(prompt, None, status_msg, resolved_cwd, user_id=user_id)
             else:
                 response, session_id = await handle_message_simple(prompt, None, resolved_cwd)
             
@@ -467,6 +468,39 @@ async def auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session_autonomy[session_id] = level
     save_sessions()
     await update.message.reply_text(f"{emoji.get(level, '')} Autonomy set to `{level}` for this session", parse_mode="Markdown")
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop the currently running droid process for this user"""
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    user_id = update.effective_user.id
+    
+    if user_id not in active_processes:
+        await update.message.reply_text("No active process to stop.")
+        return
+    
+    proc_info = active_processes.pop(user_id)
+    process = proc_info.get("process")
+    status_msg = proc_info.get("status_msg")
+    
+    if process and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except:
+            process.kill()
+        
+        if status_msg:
+            try:
+                await status_msg.edit_text("🛑 Stopped by user")
+            except:
+                pass
+        
+        await update.message.reply_text("✓ Process stopped")
+        logger.info(f"User {user_id} stopped active process")
+    else:
+        await update.message.reply_text("Process already finished.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -636,7 +670,8 @@ async def handle_permission_callback(update: Update, context: ContextTypes.DEFAU
             req["user_message"], 
             req["session_id"], 
             status_msg, 
-            req["cwd"]
+            req["cwd"],
+            user_id=req["user_id"]
         )
         
         response = response or "No response from Droid"
@@ -671,7 +706,7 @@ async def handle_permission_callback(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         await status_msg.edit_text(f"Error: {str(e)}")
 
-async def handle_message_streaming_unsafe(user_message, session_id, status_msg, cwd=None):
+async def handle_message_streaming_unsafe(user_message, session_id, status_msg, cwd=None, user_id=None):
     """Handle message with --skip-permissions-unsafe flag"""
     
     env = os.environ.copy()
@@ -696,6 +731,10 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
         cwd=working_dir,
         bufsize=1
     )
+    
+    # Track process for /stop command
+    if user_id:
+        active_processes[user_id] = {"process": process, "status_msg": status_msg}
     
     final_response = ""
     new_session_id = None
@@ -745,6 +784,11 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
         final_response = stderr.strip()
     
     process.wait()
+    
+    # Clean up process tracking
+    if user_id and user_id in active_processes:
+        del active_processes[user_id]
+    
     return final_response.strip(), new_session_id
 
 def format_tool_call(data):
@@ -833,7 +877,7 @@ def extract_session_id(line):
             pass
     return None
 
-async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off"):
+async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off", user_id=None):
     """Handle message with streaming tool updates. Returns (response, session_id)"""
     
     env = os.environ.copy()
@@ -862,6 +906,10 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
         cwd=working_dir,
         bufsize=1
     )
+    
+    # Track process for /stop command
+    if user_id:
+        active_processes[user_id] = {"process": process, "status_msg": status_msg}
     
     last_update = ""
     final_response = ""
@@ -957,6 +1005,10 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
                 final_response = extracted
                 break
     
+    # Clean up process tracking
+    if user_id and user_id in active_processes:
+        del active_processes[user_id]
+    
     return final_response.strip(), new_session_id
 
 async def handle_message_simple(user_message, session_id, cwd=None, autonomy_level="off"):
@@ -1043,9 +1095,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if autonomy_level == "unsafe":
             # Session has unsafe mode - skip all permission checks
-            response, new_session_id = await handle_message_streaming_unsafe(user_message, session_id, status_msg, session_cwd)
+            response, new_session_id = await handle_message_streaming_unsafe(user_message, session_id, status_msg, session_cwd, user_id=user_id)
         elif streaming_mode:
-            response, new_session_id = await handle_message_streaming(user_message, session_id, status_msg, session_cwd, autonomy_level)
+            response, new_session_id = await handle_message_streaming(user_message, session_id, status_msg, session_cwd, autonomy_level, user_id=user_id)
         else:
             response, new_session_id = await handle_message_simple(user_message, session_id, session_cwd, autonomy_level)
         
@@ -1130,6 +1182,7 @@ def main():
     app.add_handler(CommandHandler("cwd", cwd_command))
     app.add_handler(CommandHandler("stream", stream_toggle))
     app.add_handler(CommandHandler("auto", auto_command))
+    app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("git", git_command))
