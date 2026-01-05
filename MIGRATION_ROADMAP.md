@@ -63,7 +63,7 @@ OpenCode uses config-based permissions instead of `--auto` flag:
 
 ---
 
-## Phase 2: Server Daemon Mode
+## Phase 2: Server Daemon Mode ✅ COMPLETED
 
 **Goal:** Run `opencode serve` as daemon for faster response times (no cold boot).
 
@@ -71,12 +71,21 @@ OpenCode uses config-based permissions instead of `--auto` flag:
 
 ### Tasks
 
-| Task | Description |
-|------|-------------|
-| 2.1 | Create systemd service for `opencode serve --port 8080` |
-| 2.2 | Update CLI calls to use `--attach http://localhost:8080` |
-| 2.3 | Add health check for server availability |
-| 2.4 | Implement fallback to direct CLI if server unavailable |
+| Task | Description | Status |
+|------|-------------|--------|
+| 2.1 | Create systemd service for `opencode serve --port 8080` | ✅ Done |
+| 2.2 | Update CLI calls to use `--attach http://localhost:8080` | ✅ Done |
+| 2.3 | Add health check for server availability | ✅ Done |
+| 2.4 | Implement fallback to direct CLI if server unavailable | ✅ Done |
+
+### Implementation Details
+
+- Added `opencode-serve.service` systemd unit file
+- New `OPENCODE_SERVER_URL` environment variable (default: `http://127.0.0.1:8080`)
+- `is_server_available()` function with 30-second caching
+- `build_opencode_command()` helper adds `--attach` flag when server is available
+- New `/server` command to check daemon status
+- `/status` now shows server connection status
 
 ### Benefits
 - ~5-10x faster response time (no process startup)

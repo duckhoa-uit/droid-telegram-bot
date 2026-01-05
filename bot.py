@@ -16,6 +16,8 @@ import select
 import uuid
 import re
 import html
+import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
@@ -32,6 +34,7 @@ LOG_FILE = os.environ.get("OPENCODE_LOG_FILE", "./bot.log")
 SESSIONS_FILE = os.environ.get("OPENCODE_SESSIONS_FILE", "./sessions.json")
 OPENCODE_PATH = os.environ.get("OPENCODE_PATH", "opencode")  # Path to opencode CLI
 DEFAULT_CWD = os.environ.get("OPENCODE_DEFAULT_CWD", os.path.expanduser("~"))
+OPENCODE_SERVER_URL = os.environ.get("OPENCODE_SERVER_URL", "http://127.0.0.1:8080")  # Daemon server URL
 
 # Validate required config
 if not BOT_TOKEN:
@@ -77,10 +80,62 @@ session_history = []  # List of all sessions with metadata for /session command
 session_autonomy = {}  # session_id -> "low"|"medium"|"high"|"unsafe" (default: off)
 active_processes = {}  # user_id -> {"process": Process, "status_msg": Message} - for /stop command
 
+# Server daemon state
+_server_available = None  # None = unknown, True/False = cached result
+_server_check_time = 0  # Last time we checked server availability
+
 # Context to prepend to messages so OpenCode knows about bot features
 BOT_CONTEXT = """[Telegram Bot Context: You're running inside a Telegram bot. The user can use /new <path> to change the working directory for their session (e.g., /new ~/projects/myapp). Don't suggest using cd to change directories - instead tell them to use /new <path>.]
 
 """
+
+def is_server_available(force_check=False):
+    """Check if OpenCode server daemon is running and available"""
+    global _server_available, _server_check_time
+    import time
+    
+    # Cache result for 30 seconds to avoid hammering the server
+    current_time = time.time()
+    if not force_check and _server_available is not None and (current_time - _server_check_time) < 30:
+        return _server_available
+    
+    try:
+        # Try to connect to the server - OpenCode serves HTML at root, just check connectivity
+        req = urllib.request.Request(f"{OPENCODE_SERVER_URL}/", method='HEAD')
+        with urllib.request.urlopen(req, timeout=2) as response:
+            _server_available = response.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        _server_available = False
+    
+    _server_check_time = current_time
+    logger.info(f"OpenCode server available: {_server_available}")
+    return _server_available
+
+def get_server_status():
+    """Get detailed server status for /server command"""
+    try:
+        req = urllib.request.Request(f"{OPENCODE_SERVER_URL}/", method='HEAD')
+        with urllib.request.urlopen(req, timeout=2) as response:
+            if response.status == 200:
+                return True, {"status": "running", "url": OPENCODE_SERVER_URL}
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+        return False, str(e)
+    return False, "Unknown error"
+
+def build_opencode_command(session_id=None, use_server=True):
+    """Build OpenCode command with optional --attach flag for server mode"""
+    cmd = [OPENCODE_PATH, "run"]
+    
+    # Add --attach flag if server is available
+    if use_server and is_server_available():
+        cmd.extend(["--attach", OPENCODE_SERVER_URL])
+    
+    cmd.extend(["--format", "json"])
+    
+    if session_id:
+        cmd.extend(["--session", session_id])
+    
+    return cmd
 
 def load_sessions():
     """Load sessions from JSON file"""
@@ -234,6 +289,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/cwd - Show current working directory\n"
         f"/stream - Toggle live tool updates ({stream_status})\n"
         "/status - Bot and OpenCode status\n"
+        "/server - Check daemon server status\n"
         "/git [cmd] - Quick git commands\n\n"
         "<b>💡 Tips:</b>\n"
         "• Live updates show which tools OpenCode uses\n"
@@ -523,6 +579,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stream_status = "ON" if streaming_mode else "OFF"
         active_sessions = len(sessions)
         
+        # Check server daemon status
+        server_available = is_server_available(force_check=True)
+        server_status = "🟢 Connected" if server_available else "🔴 Not running"
+        
         user_id = update.effective_user.id
         active_user_session = ""
         if user_id in active_session_per_user:
@@ -533,11 +593,45 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         status_msg = (f"✅ Bot Status: Running\n"
                      f"🤖 OpenCode: {opencode_version}\n"
+                     f"🖥️ Server: {server_status}\n"
                      f"⚡ Live updates: {stream_status}\n"
                      f"📊 Active sessions: {active_sessions}{active_user_session}")
         await update.message.reply_text(status_msg)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
+
+async def server_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check OpenCode server daemon status"""
+    if not is_authorized(update.effective_user.id):
+        return
+    
+    available, data = get_server_status()
+    
+    if available:
+        if isinstance(data, dict):
+            info_lines = ["🟢 <b>OpenCode Server Running</b>\n"]
+            info_lines.append(f"URL: <code>{OPENCODE_SERVER_URL}</code>")
+            if "version" in data:
+                info_lines.append(f"Version: {data['version']}")
+            if "uptime" in data:
+                info_lines.append(f"Uptime: {data['uptime']}")
+            await update.message.reply_text("\n".join(info_lines), parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(
+                f"🟢 <b>OpenCode Server Running</b>\n"
+                f"URL: <code>{OPENCODE_SERVER_URL}</code>",
+                parse_mode=ParseMode.HTML
+            )
+    else:
+        await update.message.reply_text(
+            f"🔴 <b>OpenCode Server Not Available</b>\n\n"
+            f"URL: <code>{OPENCODE_SERVER_URL}</code>\n"
+            f"Error: {data}\n\n"
+            f"<i>The bot will use direct CLI mode (slower cold starts).\n"
+            f"To enable daemon mode, start the server with:</i>\n"
+            f"<code>opencode serve --port 8080</code>",
+            parse_mode=ParseMode.HTML
+        )
 
 async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Execute git commands"""
@@ -724,17 +818,16 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    # Build OpenCode command - OpenCode uses config-based permissions, not CLI flags
+    # Build OpenCode command with optional server attachment
     # For unsafe mode, we rely on the opencode.json permissions config
-    cmd = [OPENCODE_PATH, "run", "--format", "json"]
-    if session_id:
-        cmd.extend(["--session", session_id])
+    cmd = build_opencode_command(session_id, use_server=True)
     
     # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running opencode (elevated) in cwd: {working_dir}")
+    using_server = "--attach" in cmd
+    logger.info(f"Running opencode (elevated) in cwd: {working_dir} (server: {using_server})")
     
     process = subprocess.Popen(
         cmd,
@@ -956,17 +1049,17 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    # Build OpenCode command
-    cmd = [OPENCODE_PATH, "run", "--format", "json"]
+    # Build OpenCode command with optional server attachment
+    cmd = build_opencode_command(session_id, use_server=True)
     if session_id:
-        cmd.extend(["--session", session_id])
         logger.info(f"Continuing session: {session_id}")
     
     # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running opencode in cwd: {working_dir}")
+    using_server = "--attach" in cmd
+    logger.info(f"Running opencode in cwd: {working_dir} (server: {using_server})")
     
     process = subprocess.Popen(
         cmd,
@@ -1099,16 +1192,15 @@ async def handle_message_simple(user_message, session_id, cwd=None, autonomy_lev
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    # Build OpenCode command
-    cmd = [OPENCODE_PATH, "run", "--format", "json"]
-    if session_id:
-        cmd.extend(["--session", session_id])
+    # Build OpenCode command with optional server attachment
+    cmd = build_opencode_command(session_id, use_server=True)
     
     # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running opencode in cwd: {working_dir}")
+    using_server = "--attach" in cmd
+    logger.info(f"Running opencode in cwd: {working_dir} (server: {using_server})")
     
     result = subprocess.run(
         cmd,
@@ -1301,6 +1393,7 @@ def main():
     app.add_handler(CommandHandler("auto", auto_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("server", server_command))
     app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("git", git_command))
     app.add_handler(CallbackQueryHandler(handle_permission_callback, pattern="^perm_"))

@@ -237,10 +237,31 @@ mkdir -p /var/log/opencode-telegram
 mkdir -p /var/lib/opencode-telegram
 ```
 
-## Step 7: Install Systemd Service
+## Step 7: Install Systemd Services
+
+### 7.1 OpenCode Server Daemon (Optional but Recommended)
+
+The server daemon eliminates cold start delays (~60s → ~2s response time).
 
 ```bash
-# Copy service file
+# Copy server service file
+cp /opt/opencode-telegram/opencode-serve.service /etc/systemd/system/
+
+# Reload systemd
+systemctl daemon-reload
+
+# Enable and start the server
+systemctl enable opencode-serve
+systemctl start opencode-serve
+
+# Check status
+systemctl status opencode-serve
+```
+
+### 7.2 Telegram Bot Service
+
+```bash
+# Copy bot service file
 cp /opt/opencode-telegram/opencode-telegram.service /etc/systemd/system/
 
 # Edit the service to use EnvironmentFile
