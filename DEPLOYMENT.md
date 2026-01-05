@@ -25,7 +25,7 @@ curl -fsSL https://opencode.ai/install | bash
 apt update && apt install -y python3 python3-pip
 
 # Install bot dependencies
-pip3 install python-telegram-bot
+pip3 install python-telegram-bot python-dotenv httpx
 ```
 
 ## Step 3: Clone the Bot
@@ -226,6 +226,9 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_ALLOWED_USER_IDS=your-user-id
 OPENCODE_PATH=/root/.opencode/bin/opencode
 OPENCODE_DEFAULT_CWD=/root
+OPENCODE_SERVER_URL=http://127.0.0.1:8080
+OPENCODE_MODEL_PROVIDER=anthropic
+OPENCODE_MODEL=claude-sonnet-4-20250514
 OPENCODE_LOG_FILE=/var/log/opencode-telegram/bot.log
 OPENCODE_SESSIONS_FILE=/var/lib/opencode-telegram/sessions.json
 ```

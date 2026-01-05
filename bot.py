@@ -13,11 +13,14 @@ import logging
 import os
 import json
 import select
+import time
 import uuid
 import re
 import html
 import urllib.request
 import urllib.error
+import asyncio
+import httpx
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
@@ -84,6 +87,143 @@ active_processes = {}  # user_id -> {"process": Process, "status_msg": Message} 
 _server_available = None  # None = unknown, True/False = cached result
 _server_check_time = 0  # Last time we checked server availability
 
+# Model configuration from environment
+OPENCODE_MODEL_PROVIDER = os.environ.get("OPENCODE_MODEL_PROVIDER", "anthropic")
+OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "claude-sonnet-4-20250514")
+
+# HTTP API client for OpenCode server
+class OpenCodeAPIClient:
+    """Async HTTP client for OpenCode server API"""
+    
+    def __init__(self, base_url: str, model_provider: str, model: str, timeout: int = 300):
+        self.base_url = base_url.rstrip('/')
+        self.model_provider = model_provider
+        self.model = model
+        self.timeout = timeout
+    
+    async def create_session(self, title: str = None, parent_id: str = None) -> dict:
+        """Create a new session via API"""
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+            payload = {"title": title or ""}
+            if parent_id:
+                payload["parentID"] = parent_id
+            res = await client.post("/session", json=payload)
+            res.raise_for_status()
+            return res.json()
+    
+    async def list_sessions(self) -> list:
+        """List all sessions"""
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+            res = await client.get("/session")
+            res.raise_for_status()
+            return res.json()
+    
+    async def abort_session(self, session_id: str) -> None:
+        """Abort a running session"""
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+            res = await client.post(f"/session/{session_id}/abort")
+            res.raise_for_status()
+    
+    async def send_message(self, session_id: str, text: str, system_prompt: str = None) -> dict:
+        """Send a message to a session and get the response"""
+        parts = [{"type": "text", "text": text}]
+        message = {
+            "modelID": self.model,
+            "providerID": self.model_provider,
+            "parts": parts,
+            "mode": "build",
+            "system": system_prompt or ""
+        }
+        
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+            res = await client.post(f"/session/{session_id}/message", json=message)
+            res.raise_for_status()
+            response_text = res.text
+            if not response_text or not response_text.strip():
+                raise ValueError("Empty response from server")
+            return res.json()
+    
+    async def send_message_streaming(
+        self, 
+        session_id: str, 
+        text: str, 
+        system_prompt: str = None,
+        on_tool_use=None,
+        on_text=None,
+        on_error=None
+    ) -> tuple[str, list]:
+        """
+        Send a message and process response with callbacks for streaming updates.
+        Returns (final_text, tool_calls_list)
+        """
+        parts = [{"type": "text", "text": text}]
+        message = {
+            "modelID": self.model,
+            "providerID": self.model_provider,
+            "parts": parts,
+            "mode": "build",
+            "system": system_prompt or ""
+        }
+        
+        final_text = ""
+        tool_calls = []
+        
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+            res = await client.post(f"/session/{session_id}/message", json=message)
+            res.raise_for_status()
+            response_text = res.text
+            if not response_text or not response_text.strip():
+                raise ValueError("Empty response from server")
+            data = res.json()
+            
+            # Process the response parts
+            response_parts = data.get("parts", [])
+            for part in response_parts:
+                part_type = part.get("type", "")
+                
+                if part_type == "text":
+                    text_content = part.get("text", "")
+                    if text_content:
+                        final_text += text_content
+                        if on_text:
+                            await on_text(text_content)
+                
+                elif part_type == "tool-invocation" or part_type == "tool_use":
+                    tool_calls.append(part)
+                    if on_tool_use:
+                        await on_tool_use(part)
+                
+                elif part_type == "error":
+                    error_msg = part.get("message", "") or part.get("error", "Unknown error")
+                    if on_error:
+                        await on_error(error_msg)
+                    final_text = f"Error: {error_msg}"
+            
+            # Also check for error in info
+            info = data.get("info", {})
+            if "error" in info and info["error"]:
+                error_msg = str(info["error"])
+                if on_error:
+                    await on_error(error_msg)
+                if not final_text:
+                    final_text = f"Error: {error_msg}"
+        
+        return final_text, tool_calls
+
+# Global API client instance (initialized lazily)
+_api_client = None
+
+def get_api_client() -> OpenCodeAPIClient:
+    """Get or create the API client instance"""
+    global _api_client
+    if _api_client is None:
+        _api_client = OpenCodeAPIClient(
+            base_url=OPENCODE_SERVER_URL,
+            model_provider=OPENCODE_MODEL_PROVIDER,
+            model=OPENCODE_MODEL
+        )
+    return _api_client
+
 # Context to prepend to messages so OpenCode knows about bot features
 BOT_CONTEXT = """[Telegram Bot Context: You're running inside a Telegram bot. The user can use /new <path> to change the working directory for their session (e.g., /new ~/projects/myapp). Don't suggest using cd to change directories - instead tell them to use /new <path>.]
 
@@ -148,6 +288,33 @@ def load_sessions():
                 active_session_per_user = {int(k): v for k, v in data.get("active_session_per_user", {}).items()}
                 session_history = data.get("session_history", [])
                 session_autonomy = data.get("session_autonomy", {})
+                
+                # Clean up invalid session IDs (old Droid format without 'ses_' prefix)
+                cleaned_count = 0
+                for user_id in list(active_session_per_user.keys()):
+                    sid = active_session_per_user[user_id].get("session_id")
+                    if sid and not is_valid_opencode_session(sid):
+                        active_session_per_user[user_id]["session_id"] = None
+                        cleaned_count += 1
+                
+                for msg_id in list(sessions.keys()):
+                    session_data = sessions[msg_id]
+                    if isinstance(session_data, dict):
+                        sid = session_data.get("session_id")
+                        if sid and not is_valid_opencode_session(sid):
+                            sessions[msg_id]["session_id"] = None
+                            cleaned_count += 1
+                
+                # Also clean session_history
+                session_history = [
+                    entry for entry in session_history 
+                    if is_valid_opencode_session(entry.get("session_id", ""))
+                ]
+                
+                if cleaned_count > 0:
+                    logger.info(f"Cleaned {cleaned_count} invalid session IDs (old Droid format)")
+                    save_sessions()
+                
                 logger.info(f"Loaded {len(sessions)} sessions, {len(session_history)} history entries, {len(session_autonomy)} autonomy settings")
     except Exception as e:
         logger.error(f"Failed to load sessions: {e}")
@@ -815,8 +982,18 @@ async def handle_permission_callback(update: Update, context: ContextTypes.DEFAU
 async def handle_message_streaming_unsafe(user_message, session_id, status_msg, cwd=None, user_id=None):
     """Handle message with elevated permissions (unsafe mode)"""
     
-    env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
+    
+    # Try HTTP API first if server is available
+    if is_server_available():
+        logger.info(f"Using HTTP API mode for unsafe message (server available)")
+        try:
+            return await handle_message_via_api_unsafe(user_message, session_id, status_msg, cwd, user_id)
+        except Exception as e:
+            logger.warning(f"API call failed, falling back to CLI: {e}")
+    
+    # Fallback to CLI mode
+    env = os.environ.copy()
     
     # Build OpenCode command with optional server attachment
     # For unsafe mode, we rely on the opencode.json permissions config
@@ -1002,6 +1179,129 @@ def format_opencode_tool_call(part):
     else:
         return f"{status_icon} {tool_name}".strip()
 
+def format_api_tool_call(part):
+    """Format a tool call from API response for display"""
+    # API response format differs slightly - handle both formats
+    tool_name = part.get("toolName", "") or part.get("tool", "") or part.get("name", "unknown")
+    
+    # Get input/args from various possible locations
+    input_data = part.get("args", {}) or part.get("input", {}) or part.get("state", {}).get("input", {})
+    if isinstance(input_data, str):
+        try:
+            input_data = json.loads(input_data)
+        except:
+            input_data = {}
+    
+    detail = ""
+    tool_lower = tool_name.lower()
+    
+    if tool_lower == "bash":
+        cmd = input_data.get("command", "")
+        if cmd:
+            detail = cmd[:40] + "..." if len(cmd) > 40 else cmd
+    elif tool_lower in ["read", "write", "edit"]:
+        file_path = input_data.get("path", "") or input_data.get("file", "")
+        if file_path:
+            if len(file_path) > 50:
+                detail = "..." + file_path[-47:]
+            else:
+                detail = file_path
+    elif tool_lower == "glob":
+        pattern = input_data.get("pattern", "")
+        if pattern:
+            detail = pattern[:40] + "..." if len(pattern) > 40 else pattern
+    elif tool_lower == "grep":
+        pattern = input_data.get("pattern", "")
+        if pattern:
+            detail = f"'{pattern[:25]}...'" if len(pattern) > 25 else f"'{pattern}'"
+    
+    if detail:
+        return f"→ {tool_name}: {detail}"
+    else:
+        return f"→ {tool_name}"
+
+async def handle_message_via_api(user_message, session_id, status_msg, cwd=None, user_id=None):
+    """
+    Handle message using HTTP API to OpenCode server.
+    Returns (response, session_id)
+    """
+    client = get_api_client()
+    working_dir = cwd or DEFAULT_CWD
+    
+    # Add bot context on first message of session
+    message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
+    
+    new_session_id = session_id
+    tool_updates = []
+    last_update = ""
+    
+    try:
+        # If no session, create one first
+        if not session_id:
+            logger.info(f"Creating new session via API for cwd: {working_dir}")
+            session_data = await client.create_session(title=f"Telegram: {user_message[:30]}...")
+            new_session_id = session_data.get("id")
+            logger.info(f"Created session: {new_session_id}")
+        
+        # Callback for tool updates
+        async def on_tool_use(part):
+            nonlocal last_update
+            tool_display = format_api_tool_call(part)
+            tool_updates.append(tool_display)
+            display_tools = tool_updates[-5:]
+            session_indicator = " (continuing)" if session_id else ""
+            new_status = f"Working...{session_indicator}\n\n" + "\n".join(display_tools)
+            if new_status != last_update:
+                try:
+                    await status_msg.edit_text(new_status)
+                    last_update = new_status
+                except:
+                    pass
+        
+        logger.info(f"Sending message via API to session {new_session_id}")
+        final_text, tool_calls = await client.send_message_streaming(
+            session_id=new_session_id,
+            text=message_with_context,
+            on_tool_use=on_tool_use
+        )
+        
+        return final_text.strip(), new_session_id
+        
+    except httpx.HTTPStatusError as e:
+        error_msg = f"API error: {e.response.status_code}"
+        if e.response.status_code == 404:
+            # Session not found - could be stale session ID
+            if session_id:
+                logger.warning(f"Session {session_id} not found, will create new one")
+                return await handle_message_via_api(user_message, None, status_msg, cwd, user_id)
+            error_msg = "Session not found"
+        logger.error(f"HTTP error: {e}")
+        return error_msg, new_session_id
+        
+    except httpx.TimeoutException:
+        logger.error("API request timed out")
+        return "Request timed out", new_session_id
+    
+    except ValueError as e:
+        # Empty response - session might not exist, try creating a new one
+        if session_id and "Empty response" in str(e):
+            logger.warning(f"Empty response for session {session_id}, will create new one")
+            return await handle_message_via_api(user_message, None, status_msg, cwd, user_id)
+        logger.error(f"API error: {e}")
+        return f"Error: {str(e)}", new_session_id
+        
+    except Exception as e:
+        logger.error(f"API error: {e}")
+        return f"Error: {str(e)}", new_session_id
+
+async def handle_message_via_api_unsafe(user_message, session_id, status_msg, cwd=None, user_id=None):
+    """
+    Handle message with elevated permissions using HTTP API.
+    Returns (response, session_id)
+    """
+    # For now, same as regular API call - permissions are handled server-side
+    return await handle_message_via_api(user_message, session_id, status_msg, cwd, user_id)
+
 def extract_final_text(line):
     """Extract finalText from a completion JSON line"""
     if '"finalText"' not in line:
@@ -1043,19 +1343,41 @@ def extract_session_id(line):
             pass
     return None
 
-async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off", user_id=None):
+async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off", user_id=None, retry_without_session=False, retry_without_server=False, use_api=True):
     """Handle message with streaming tool updates. Returns (response, session_id)"""
     
-    env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
+    # Try HTTP API first if server is available and we haven't been told to skip it
+    if use_api and not retry_without_server and is_server_available():
+        logger.info(f"Using HTTP API mode for message (server available)")
+        try:
+            effective_session_id = None if retry_without_session else session_id
+            response, new_session_id = await handle_message_via_api(
+                user_message, effective_session_id, status_msg, cwd, user_id
+            )
+            if response and not response.startswith("Error:") and not response.startswith("API error:"):
+                return response, new_session_id
+            # If API returned an error, try CLI fallback
+            logger.warning(f"API returned error, falling back to CLI: {response[:100]}")
+        except Exception as e:
+            logger.warning(f"API call failed, falling back to CLI: {e}")
+    
+    # Fallback to CLI mode
+    env = os.environ.copy()
+    
     # Build OpenCode command with optional server attachment
-    cmd = build_opencode_command(session_id, use_server=True)
-    if session_id:
-        logger.info(f"Continuing session: {session_id}")
+    # If retrying, don't pass the session_id to start fresh
+    effective_session_id = None if retry_without_session else session_id
+    use_server = not retry_without_server  # Disable server mode if retrying without it
+    cmd = build_opencode_command(effective_session_id, use_server=use_server)
+    if effective_session_id:
+        logger.info(f"Continuing session: {effective_session_id}")
+    elif retry_without_session and session_id:
+        logger.info(f"Retrying without session (session {session_id} not found)")
     
     # Add bot context on first message of session so OpenCode knows about /new command
-    message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
+    message_with_context = BOT_CONTEXT + user_message if not effective_session_id else user_message
     cmd.append(message_with_context)
     
     using_server = "--attach" in cmd
@@ -1080,13 +1402,58 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
     new_session_id = None
     tool_updates = []
     all_output = []
+    start_time = time.time()
+    TIMEOUT_SECONDS = 300  # 5 minute timeout
+    # Server mode should respond quickly; direct CLI needs more time for cold start
+    INITIAL_RESPONSE_TIMEOUT = 15 if using_server else 120  # 15s for server, 2min for direct CLI
+    got_first_output = False
     
     while True:
+        # Check for overall timeout
+        elapsed = time.time() - start_time
+        if elapsed > TIMEOUT_SECONDS:
+            logger.warning(f"Timeout after {elapsed:.0f}s")
+            process.terminate()
+            break
+        
+        # Check for initial response timeout (helps detect hung sessions or server issues)
+        if not got_first_output and elapsed > INITIAL_RESPONSE_TIMEOUT:
+            logger.warning(f"No output after {INITIAL_RESPONSE_TIMEOUT}s - session may not exist or server may be hung")
+            process.terminate()
+            # If we were using server mode and it hung, retry without server
+            if using_server and not retry_without_server:
+                logger.info("Retrying without server mode (--attach may be hanging)")
+                if user_id and user_id in active_processes:
+                    del active_processes[user_id]
+                return await handle_message_streaming(
+                    user_message, session_id, status_msg, cwd, autonomy_level, user_id, 
+                    retry_without_session=retry_without_session, retry_without_server=True
+                )
+            # If we were trying to continue a session and it hung, retry without session
+            if effective_session_id and not retry_without_session:
+                logger.info("Retrying without session continuation")
+                if user_id and user_id in active_processes:
+                    del active_processes[user_id]
+                return await handle_message_streaming(
+                    user_message, session_id, status_msg, cwd, autonomy_level, user_id, 
+                    retry_without_session=True, retry_without_server=retry_without_server
+                )
+            break
+        
+        # Use select for non-blocking read with timeout
+        readable, _, _ = select.select([process.stdout], [], [], 1.0)
+        if not readable:
+            if process.poll() is not None:
+                break
+            continue
+        
         line = process.stdout.readline()
         if not line:
             if process.poll() is not None:
                 break
             continue
+        
+        got_first_output = True
             
         line = line.strip()
         if not line:
@@ -1168,8 +1535,24 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
     stderr = process.stderr.read()
     if stderr:
         logger.warning(f"Stderr: {stderr[:500]}")
+        # Check for session not found error
+        if "NotFoundError" in stderr and "session" in stderr.lower():
+            logger.warning("Session not found error detected in stderr")
+            # If we were trying to continue a session, retry without it
+            if effective_session_id and not retry_without_session:
+                logger.info("Retrying without session continuation due to NotFoundError")
+                if user_id and user_id in active_processes:
+                    del active_processes[user_id]
+                return await handle_message_streaming(
+                    user_message, session_id, status_msg, cwd, autonomy_level, user_id, 
+                    retry_without_session=True, retry_without_server=retry_without_server
+                )
         if not final_response:
-            final_response = stderr.strip()
+            # Clean up error message for user display
+            if "NotFoundError" in stderr:
+                final_response = "Session not found. Starting fresh..."
+            else:
+                final_response = stderr.strip()
     
     process.wait()
     
@@ -1189,8 +1572,35 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
 async def handle_message_simple(user_message, session_id, cwd=None, autonomy_level="off"):
     """Handle message without streaming. Returns (response, session_id)"""
     
-    env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
+    
+    # Try HTTP API first if server is available
+    if is_server_available():
+        logger.info(f"Using HTTP API mode for simple message (server available)")
+        try:
+            client = get_api_client()
+            new_session_id = session_id
+            
+            # If no session, create one first
+            if not session_id:
+                session_data = await client.create_session(title=f"Telegram: {user_message[:30]}...")
+                new_session_id = session_data.get("id")
+            
+            message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
+            response = await client.send_message(new_session_id, message_with_context)
+            
+            # Extract text from response parts
+            final_text = ""
+            for part in response.get("parts", []):
+                if part.get("type") == "text":
+                    final_text += part.get("text", "")
+            
+            return final_text.strip(), new_session_id
+        except Exception as e:
+            logger.warning(f"API call failed, falling back to CLI: {e}")
+    
+    # Fallback to CLI mode
+    env = os.environ.copy()
     
     # Build OpenCode command with optional server attachment
     cmd = build_opencode_command(session_id, use_server=True)

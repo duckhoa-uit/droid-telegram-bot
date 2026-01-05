@@ -71,8 +71,11 @@ TELEGRAM_BOT_TOKEN=your-token TELEGRAM_ALLOWED_USER_IDS=123456 python bot.py
 | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | - | Comma-separated Telegram user IDs |
 | `OPENCODE_PATH` | ❌ | `opencode` | Path to OpenCode CLI |
 | `OPENCODE_DEFAULT_CWD` | ❌ | `~` | Default working directory |
-| `OPENCODE_LOG_FILE` | ❌ | `/var/log/opencode-telegram/bot.log` | Log file path |
-| `OPENCODE_SESSIONS_FILE` | ❌ | `/var/lib/opencode-telegram/sessions.json` | Sessions file |
+| `OPENCODE_SERVER_URL` | ❌ | `http://127.0.0.1:8080` | OpenCode server URL for HTTP API mode |
+| `OPENCODE_MODEL_PROVIDER` | ❌ | `anthropic` | Model provider for API mode |
+| `OPENCODE_MODEL` | ❌ | `claude-sonnet-4-20250514` | Model ID for API mode |
+| `OPENCODE_LOG_FILE` | ❌ | `./bot.log` | Log file path |
+| `OPENCODE_SESSIONS_FILE` | ❌ | `./sessions.json` | Sessions file |
 
 ## Commands
 

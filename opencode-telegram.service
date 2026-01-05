@@ -16,6 +16,8 @@ Environment=TELEGRAM_ALLOWED_USER_IDS=your-telegram-user-id
 Environment=OPENCODE_PATH=/root/.opencode/bin/opencode
 Environment=OPENCODE_DEFAULT_CWD=/root
 Environment=OPENCODE_SERVER_URL=http://127.0.0.1:8080
+Environment=OPENCODE_MODEL_PROVIDER=anthropic
+Environment=OPENCODE_MODEL=claude-sonnet-4-20250514
 Environment=OPENCODE_LOG_FILE=/var/log/opencode-telegram/bot.log
 Environment=OPENCODE_SESSIONS_FILE=/var/lib/opencode-telegram/sessions.json
 

@@ -94,22 +94,44 @@ OpenCode uses config-based permissions instead of `--auto` flag:
 
 ---
 
-## Phase 3: HTTP API Migration
+## Phase 3: HTTP API Migration ✅ COMPLETED
 
-**Goal:** Replace subprocess calls with `opencode-client` Python library.
+**Goal:** Replace subprocess calls with direct HTTP API calls to OpenCode server.
 
 **Estimated Effort:** 4-6 hours
 
 ### Tasks
 
-| Task | Description |
-|------|-------------|
-| 3.1 | Add `opencode-client` to `requirements.txt` |
-| 3.2 | Create `OpenCodeService` class wrapping the client |
-| 3.3 | Replace `handle_message_streaming()` with async API calls |
-| 3.4 | Replace `handle_message_simple()` with sync API calls |
-| 3.5 | Migrate session management to client's built-in tracking |
-| 3.6 | Implement SSE streaming for real-time updates |
+| Task | Description | Status |
+|------|-------------|--------|
+| 3.1 | Add `httpx` to `requirements.txt` | ✅ Done |
+| 3.2 | Create `OpenCodeAPIClient` class with async HTTP methods | ✅ Done |
+| 3.3 | Update `handle_message_streaming()` to use HTTP API first, fallback to CLI | ✅ Done |
+| 3.4 | Update `handle_message_simple()` to use HTTP API first, fallback to CLI | ✅ Done |
+| 3.5 | Update `handle_message_streaming_unsafe()` to use HTTP API | ✅ Done |
+| 3.6 | Add `OPENCODE_MODEL_PROVIDER` and `OPENCODE_MODEL` env vars | ✅ Done |
+
+### Implementation Details
+
+- Added `OpenCodeAPIClient` class in bot.py with async methods:
+  - `create_session()` - POST /session
+  - `list_sessions()` - GET /session
+  - `abort_session()` - POST /session/{id}/abort
+  - `send_message()` - POST /session/{id}/message
+  - `send_message_streaming()` - POST /session/{id}/message with callbacks
+- Added `handle_message_via_api()` and `handle_message_via_api_unsafe()` functions
+- All message handlers now try HTTP API first, then fallback to CLI if:
+  - Server is unavailable
+  - API returns an error
+  - API call throws an exception
+- Session creation is handled automatically when no session_id is provided
+- Tool call updates are extracted from API response parts
+
+### Benefits
+- Fixes the `--format json` + `--attach` issue (no more CLI parsing)
+- Direct HTTP communication is more reliable
+- Better error handling with proper HTTP status codes
+- Automatic fallback to CLI ensures backwards compatibility
 
 ### Architecture
 
@@ -120,30 +142,8 @@ OpenCode uses config-based permissions instead of `--auto` flag:
 └─────────────┘     └──────────────────┘     └─────────────┘
        │                    ▲
        │                    │
-       └── opencode-client ─┘
-           (Python async)
-```
-
-### Code Example
-
-```python
-from opencode_client import OpenCodeClient
-
-class OpenCodeService:
-    def __init__(self):
-        self.client = OpenCodeClient(
-            base_url="http://localhost:8080",
-            model_provider="anthropic",
-            model="claude-sonnet-4",
-        )
-    
-    async def send_message(self, text: str, session_id: str = None):
-        if not session_id:
-            session = await self.client.create_current_session()
-            session_id = session.id
-        
-        response = await self.client.send_message(text, session_id=session_id)
-        return response.to_string(), session_id
+       └── httpx (async) ───┘
+            HTTP API
 ```
 
 ---
