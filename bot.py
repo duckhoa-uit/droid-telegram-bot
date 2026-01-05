@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Droid Telegram Bot - A Telegram interface for Factory's Droid CLI
+OpenCode Telegram Bot - A Telegram interface for OpenCode AI Coding Agent
 
-This bot allows you to interact with Droid via Telegram messages,
+This bot allows you to interact with OpenCode via Telegram messages,
 with live streaming of tool calls and session management.
 
-Repository: https://github.com/anthropics/droid-telegram
+Repository: https://github.com/duckhoa-uit/opencode-telegram-bot
 License: MIT
 """
 import subprocess
@@ -16,18 +16,22 @@ import select
 import uuid
 import re
 import html
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from datetime import datetime
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Configuration from environment variables
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_IDS = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "")  # Comma-separated list
-LOG_FILE = os.environ.get("DROID_LOG_FILE", "/var/log/droid-telegram/bot.log")
-SESSIONS_FILE = os.environ.get("DROID_SESSIONS_FILE", "/var/lib/droid-telegram/sessions.json")
-DROID_PATH = os.environ.get("DROID_PATH", "droid")  # Path to droid CLI
-DEFAULT_CWD = os.environ.get("DROID_DEFAULT_CWD", os.path.expanduser("~"))
+LOG_FILE = os.environ.get("OPENCODE_LOG_FILE", "./bot.log")
+SESSIONS_FILE = os.environ.get("OPENCODE_SESSIONS_FILE", "./sessions.json")
+OPENCODE_PATH = os.environ.get("OPENCODE_PATH", "opencode")  # Path to opencode CLI
+DEFAULT_CWD = os.environ.get("OPENCODE_DEFAULT_CWD", os.path.expanduser("~"))
 
 # Validate required config
 if not BOT_TOKEN:
@@ -51,9 +55,17 @@ def is_authorized(user_id):
         return False
     return user_id in ALLOWED_USERS
 
-# Ensure directories exist
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-os.makedirs(os.path.dirname(SESSIONS_FILE), exist_ok=True)
+def is_valid_opencode_session(session_id):
+    """Check if a session ID is valid for OpenCode (must start with 'ses_')"""
+    if not session_id:
+        return False
+    return session_id.startswith("ses_")
+
+# Ensure directories exist (only if not using current directory)
+if os.path.dirname(LOG_FILE):
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+if os.path.dirname(SESSIONS_FILE):
+    os.makedirs(os.path.dirname(SESSIONS_FILE), exist_ok=True)
 
 # State
 streaming_mode = True  # Default on
@@ -65,7 +77,7 @@ session_history = []  # List of all sessions with metadata for /session command
 session_autonomy = {}  # session_id -> "low"|"medium"|"high"|"unsafe" (default: off)
 active_processes = {}  # user_id -> {"process": Process, "status_msg": Message} - for /stop command
 
-# Context to prepend to messages so droid knows about bot features
+# Context to prepend to messages so OpenCode knows about bot features
 BOT_CONTEXT = """[Telegram Bot Context: You're running inside a Telegram bot. The user can use /new <path> to change the working directory for their session (e.g., /new ~/projects/myapp). Don't suggest using cd to change directories - instead tell them to use /new <path>.]
 
 """
@@ -191,7 +203,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     stream_status = "ON" if streaming_mode else "OFF"
     await update.message.reply_text(
-        "🤖 Droid Telegram Bot ready!\n\n"
+        "🤖 OpenCode Telegram Bot ready!\n\n"
         "Commands:\n"
         "/new <path> - Start new session in directory\n"
         "/cwd - Show/change working directory\n"
@@ -207,10 +219,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     stream_status = "ON" if streaming_mode else "OFF"
     await update.message.reply_text(
-        "🤖 <b>Droid Telegram Bot Help</b>\n\n"
-        "This bot connects to Factory's Droid CLI.\n\n"
+        "🤖 <b>OpenCode Telegram Bot Help</b>\n\n"
+        "This bot connects to OpenCode AI Coding Agent.\n\n"
         "<b>📝 Usage:</b>\n"
-        "• Send any message to interact with Droid\n"
+        "• Send any message to interact with OpenCode\n"
         "• Reply to a message to continue that session\n"
         "• Use /new to start fresh in a directory\n\n"
         "<b>⚙️ Commands:</b>\n"
@@ -221,10 +233,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/auto [level] - Set autonomy (off/low/medium/high/unsafe)\n"
         "/cwd - Show current working directory\n"
         f"/stream - Toggle live tool updates ({stream_status})\n"
-        "/status - Bot and Droid status\n"
+        "/status - Bot and OpenCode status\n"
         "/git [cmd] - Quick git commands\n\n"
         "<b>💡 Tips:</b>\n"
-        "• Live updates show which tools Droid uses\n"
+        "• Live updates show which tools OpenCode uses\n"
         "• Sessions persist across messages\n"
         "• Use /auto high to enable tool execution\n"
         "• Timeout is 5 minutes per request",
@@ -330,7 +342,7 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 response, session_id = await handle_message_simple(prompt, None, resolved_cwd)
             
-            response = response or "No response from Droid"
+            response = response or "No response from OpenCode"
             
             if len(response) > 4000:
                 response = response[:4000] + "\n\n[Response truncated]"
@@ -470,7 +482,7 @@ async def auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{emoji.get(level, '')} Autonomy set to `{level}` for this session", parse_mode="Markdown")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Stop the currently running droid process for this user"""
+    """Stop the currently running opencode process for this user"""
     if not is_authorized(update.effective_user.id):
         return
     
@@ -506,8 +518,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
     try:
-        droid_result = subprocess.run([DROID_PATH, "--version"], capture_output=True, text=True, timeout=10)
-        droid_version = droid_result.stdout.strip() or "unknown"
+        opencode_result = subprocess.run([OPENCODE_PATH, "--version"], capture_output=True, text=True, timeout=10)
+        opencode_version = opencode_result.stdout.strip() or "unknown"
         stream_status = "ON" if streaming_mode else "OFF"
         active_sessions = len(sessions)
         
@@ -520,7 +532,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_user_session = f"\n\nYour active session: {sid} in {cwd}"
         
         status_msg = (f"✅ Bot Status: Running\n"
-                     f"🤖 Droid: {droid_version}\n"
+                     f"🤖 OpenCode: {opencode_version}\n"
                      f"⚡ Live updates: {stream_status}\n"
                      f"📊 Active sessions: {active_sessions}{active_user_session}")
         await update.message.reply_text(status_msg)
@@ -674,7 +686,7 @@ async def handle_permission_callback(update: Update, context: ContextTypes.DEFAU
             user_id=req["user_id"]
         )
         
-        response = response or "No response from Droid"
+        response = response or "No response from OpenCode"
         if len(response) > 4000:
             response = response[:4000] + "\n\n[Response truncated]"
         
@@ -707,20 +719,22 @@ async def handle_permission_callback(update: Update, context: ContextTypes.DEFAU
         await status_msg.edit_text(f"Error: {str(e)}")
 
 async def handle_message_streaming_unsafe(user_message, session_id, status_msg, cwd=None, user_id=None):
-    """Handle message with --skip-permissions-unsafe flag"""
+    """Handle message with elevated permissions (unsafe mode)"""
     
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    cmd = [DROID_PATH, "exec", "--skip-permissions-unsafe", "--output-format", "stream-json"]
+    # Build OpenCode command - OpenCode uses config-based permissions, not CLI flags
+    # For unsafe mode, we rely on the opencode.json permissions config
+    cmd = [OPENCODE_PATH, "run", "--format", "json"]
     if session_id:
-        cmd.extend(["-s", session_id])
+        cmd.extend(["--session", session_id])
     
-    # Add bot context on first message of session so droid knows about /new command
+    # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running droid UNSAFE in cwd: {working_dir}")
+    logger.info(f"Running opencode (elevated) in cwd: {working_dir}")
     
     process = subprocess.Popen(
         cmd,
@@ -756,8 +770,13 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
             data = json.loads(line)
             event_type = data.get("type", "")
             
-            if event_type == "tool_call":
-                tool_display = format_tool_call(data)
+            # Extract session ID from any event
+            if not new_session_id and "sessionID" in data:
+                new_session_id = data.get("sessionID")
+            
+            if event_type == "tool_use":
+                part = data.get("part", {})
+                tool_display = format_opencode_tool_call(part)
                 tool_updates.append(tool_display)
                 display_tools = tool_updates[-5:]
                 new_status = "Working... (elevated)\n\n" + "\n".join(display_tools)
@@ -767,11 +786,13 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
                         last_update = new_status
                     except:
                         pass
-            elif event_type == "completion":
-                final_response = data.get("finalText", "")
-                new_session_id = data.get("session_id")
+            elif event_type == "text":
+                part = data.get("part", {})
+                text = part.get("text", "")
+                if text:
+                    final_response += text
             elif event_type == "error":
-                final_response = f"Error: {data.get('message', 'Unknown error')}"
+                final_response = f"Error: {data.get('message', '') or data.get('error', 'Unknown error')}"
         except json.JSONDecodeError:
             extracted = extract_final_text(line)
             if extracted:
@@ -792,7 +813,7 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
     return final_response.strip(), new_session_id
 
 def format_tool_call(data):
-    """Format a tool call with relevant details for display"""
+    """Format a tool call with relevant details for display (legacy format)"""
     tool_name = data.get("toolName", "") or data.get("name", "unknown")
     params = data.get("input", {}) or data.get("parameters", {}) or data.get("args", {})
     if isinstance(params, str):
@@ -835,6 +856,58 @@ def format_tool_call(data):
         return f"→ {tool_name}: {detail}"
     else:
         return f"→ {tool_name}"
+
+def format_opencode_tool_call(part):
+    """Format an OpenCode tool_use event for display"""
+    tool_name = part.get("tool", "unknown")
+    state = part.get("state", {})
+    input_data = state.get("input", {})
+    status = state.get("status", "")
+    title = state.get("title", "")
+    
+    if isinstance(input_data, str):
+        try:
+            input_data = json.loads(input_data)
+        except:
+            input_data = {}
+    
+    detail = ""
+    
+    # Use title if available
+    if title:
+        detail = title[:50] + "..." if len(title) > 50 else title
+    # Otherwise extract from input based on tool type
+    elif tool_name == "bash":
+        cmd = input_data.get("command", "")
+        if cmd:
+            detail = cmd[:40] + "..." if len(cmd) > 40 else cmd
+    elif tool_name in ["read", "write", "edit"]:
+        file_path = input_data.get("path", "") or input_data.get("file", "")
+        if file_path:
+            if len(file_path) > 50:
+                detail = "..." + file_path[-47:]
+            else:
+                detail = file_path
+    elif tool_name == "glob":
+        pattern = input_data.get("pattern", "")
+        if pattern:
+            detail = pattern[:40] + "..." if len(pattern) > 40 else pattern
+    elif tool_name == "grep":
+        pattern = input_data.get("pattern", "")
+        if pattern:
+            detail = f"'{pattern[:25]}...'" if len(pattern) > 25 else f"'{pattern}'"
+    elif tool_name == "web_search":
+        query = input_data.get("query", "")
+        if query:
+            detail = f"'{query[:25]}...'" if len(query) > 25 else f"'{query}'"
+    
+    # Status indicator
+    status_icon = "✓" if status == "completed" else "⏳" if status == "running" else ""
+    
+    if detail:
+        return f"{status_icon} {tool_name}: {detail}".strip()
+    else:
+        return f"{status_icon} {tool_name}".strip()
 
 def extract_final_text(line):
     """Extract finalText from a completion JSON line"""
@@ -883,19 +956,17 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    cmd = [DROID_PATH, "exec"]
-    if autonomy_level != "off":
-        cmd.extend(["--auto", autonomy_level])
-    cmd.extend(["--output-format", "stream-json"])
+    # Build OpenCode command
+    cmd = [OPENCODE_PATH, "run", "--format", "json"]
     if session_id:
-        cmd.extend(["-s", session_id])
+        cmd.extend(["--session", session_id])
         logger.info(f"Continuing session: {session_id}")
     
-    # Add bot context on first message of session so droid knows about /new command
+    # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running droid in cwd: {working_dir} with autonomy={autonomy_level}")
+    logger.info(f"Running opencode in cwd: {working_dir}")
     
     process = subprocess.Popen(
         cmd,
@@ -935,8 +1006,14 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
             data = json.loads(line)
             event_type = data.get("type", "")
             
-            if event_type == "tool_call":
-                tool_display = format_tool_call(data)
+            # Extract session ID from any event
+            if not new_session_id and "sessionID" in data:
+                new_session_id = data.get("sessionID")
+            
+            if event_type == "tool_use":
+                # OpenCode format: part.tool, part.state.input, part.state.output
+                part = data.get("part", {})
+                tool_display = format_opencode_tool_call(part)
                 tool_updates.append(tool_display)
                 display_tools = tool_updates[-5:]
                 session_indicator = " (continuing)" if session_id else ""
@@ -948,20 +1025,25 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
                     except:
                         pass
             
-            elif event_type == "completion":
-                final_response = data.get("finalText", "")
-                new_session_id = data.get("session_id")
-                        
             elif event_type == "text":
-                text = data.get("text", "")
+                # OpenCode format: part.text
+                part = data.get("part", {})
+                text = part.get("text", "")
                 if text:
                     final_response += text
+            
+            elif event_type == "step_finish":
+                # Step completed - extract session ID if not already found
+                part = data.get("part", {})
+                if not new_session_id:
+                    new_session_id = data.get("sessionID")
                     
             elif event_type == "error":
-                error_msg = data.get("message", "Unknown error")
+                error_msg = data.get("message", "") or data.get("error", "Unknown error")
                 final_response = f"Error: {error_msg}"
                 
         except json.JSONDecodeError as e:
+            # Try legacy extraction for backwards compatibility
             extracted = extract_final_text(line)
             if extracted:
                 final_response = extracted
@@ -1017,17 +1099,16 @@ async def handle_message_simple(user_message, session_id, cwd=None, autonomy_lev
     env = os.environ.copy()
     working_dir = cwd or DEFAULT_CWD
     
-    cmd = [DROID_PATH, "exec"]
-    if autonomy_level != "off":
-        cmd.extend(["--auto", autonomy_level])
+    # Build OpenCode command
+    cmd = [OPENCODE_PATH, "run", "--format", "json"]
     if session_id:
-        cmd.extend(["-s", session_id])
+        cmd.extend(["--session", session_id])
     
-    # Add bot context on first message of session so droid knows about /new command
+    # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
     cmd.append(message_with_context)
     
-    logger.info(f"Running droid in cwd: {working_dir} with autonomy={autonomy_level}")
+    logger.info(f"Running opencode in cwd: {working_dir}")
     
     result = subprocess.run(
         cmd,
@@ -1038,7 +1119,31 @@ async def handle_message_simple(user_message, session_id, cwd=None, autonomy_lev
         cwd=working_dir
     )
     
-    return result.stdout.strip() or result.stderr.strip(), None
+    # Parse JSON output to extract text and session ID
+    output = result.stdout.strip()
+    final_text = ""
+    new_session_id = None
+    
+    for line in output.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            event_type = data.get("type", "")
+            
+            if not new_session_id and "sessionID" in data:
+                new_session_id = data.get("sessionID")
+            
+            if event_type == "text":
+                part = data.get("part", {})
+                text = part.get("text", "")
+                if text:
+                    final_text += text
+        except json.JSONDecodeError:
+            continue
+    
+    return final_text.strip() or result.stderr.strip(), new_session_id
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1063,19 +1168,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 session_cwd = session_data.get("cwd") or DEFAULT_CWD
             else:
                 session_id = session_data
-            is_continuation = True
+            # Validate session ID format for OpenCode
+            if not is_valid_opencode_session(session_id):
+                session_id = None  # Invalid format, start fresh
+            else:
+                is_continuation = True
         else:
             if user_id in active_session_per_user:
                 active = active_session_per_user[user_id]
                 session_id = active.get("session_id")
                 session_cwd = active.get("cwd") or DEFAULT_CWD
-                is_continuation = True
+                # Validate session ID format for OpenCode
+                if not is_valid_opencode_session(session_id):
+                    session_id = None
+                else:
+                    is_continuation = True
     else:
         if user_id in active_session_per_user:
             active = active_session_per_user[user_id]
             session_id = active.get("session_id")
             session_cwd = active.get("cwd") or DEFAULT_CWD
-            is_continuation = True
+            # Validate session ID format for OpenCode
+            if not is_valid_opencode_session(session_id):
+                session_id = None
+            else:
+                is_continuation = True
     
     short_cwd = session_cwd.replace(os.path.expanduser("~"), "~")
     short_session = session_id[:8] if session_id else "new"
@@ -1101,7 +1218,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             response, new_session_id = await handle_message_simple(user_message, session_id, session_cwd, autonomy_level)
         
-        response = response or "No response from Droid"
+        response = response or "No response from OpenCode"
         
         # Check for permission errors
         if "insufficient permission" in response.lower() or "skip-permissions-unsafe" in response.lower():
@@ -1127,7 +1244,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                "⚠️ Droid needs elevated permissions.\n\n"
+                "⚠️ OpenCode needs elevated permissions.\n\n"
                 "• *Once* - allow this action only\n"
                 "• *Always* - set session to unsafe mode\n"
                 "• *Deny* - cancel this action",
@@ -1189,7 +1306,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_permission_callback, pattern="^perm_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("Starting Droid Telegram bot...")
+    logger.info("Starting OpenCode Telegram bot...")
     logger.info(f"Allowed users: {ALLOWED_USERS}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

@@ -1,51 +1,48 @@
-# Droid Telegram Bot
+# OpenCode Telegram Bot
 
-A Telegram bot that interfaces with [Factory's Droid CLI](https://factory.ai), allowing you to interact with Droid via Telegram messages.
+A Telegram bot that interfaces with [OpenCode AI Coding Agent](https://opencode.ai), allowing you to interact with OpenCode via Telegram messages.
 
 ## Features
 
-- 💬 **Chat with Droid** - Send messages and get AI-powered responses
-- ⚡ **Live Streaming** - Watch tool calls in real-time as Droid works
+- 💬 **Chat with OpenCode** - Send messages and get AI-powered responses
+- ⚡ **Live Streaming** - Watch tool calls in real-time as OpenCode works
 - 📂 **Session Management** - Persistent sessions with working directory context
 - 🔐 **Access Control** - Restrict bot access to specific Telegram users
-- 🎚️ **Autonomy Levels** - Control how much freedom Droid has (off/low/medium/high/unsafe)
+- 🎚️ **Autonomy Levels** - Control permissions (off/low/medium/high/unsafe)
 - 🔧 **Git Integration** - Quick `/git` commands for common operations
+- 🤖 **Multi-Model** - Supports Claude, GPT, Gemini via OpenCode
 
 ## Prerequisites
 
 - Python 3.10+
-- A [Factory](https://factory.ai) account and API key
-- [Droid CLI](https://docs.factory.ai) installed
+- [OpenCode](https://opencode.ai) installed and configured
 - Telegram bot token (from [@BotFather](https://t.me/botfather))
 - Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
 
 ## Quick Start
 
-### 1. Install Droid CLI
+### 1. Install OpenCode
 
 ```bash
-# Install the Droid CLI
-curl -fsSL https://factory.ai/install.sh | sh
+# Install OpenCode
+curl -fsSL https://opencode.ai/install | bash
 
 # Verify installation
-droid --version
+~/.opencode/bin/opencode --version
+
+# Authenticate (follow OAuth flow)
+~/.opencode/bin/opencode auth
 ```
 
-### 2. Get a Factory API Key
-
-1. Sign up at [factory.ai](https://factory.ai)
-2. Go to Settings → API Keys
-3. Create a new API key and copy it
-
-### 3. Clone and Install
+### 2. Clone and Install
 
 ```bash
-git clone https://github.com/factory-ben/droid-telegram-bot.git
-cd droid-telegram-bot
+git clone https://github.com/duckhoa-uit/opencode-telegram-bot.git
+cd opencode-telegram-bot
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment
+### 3. Configure Environment
 
 ```bash
 cp .env.example .env
@@ -53,11 +50,10 @@ cp .env.example .env
 ```
 
 Required environment variables:
-- `FACTORY_API_KEY` - Your Factory API key (from step 2)
 - `TELEGRAM_BOT_TOKEN` - Your bot token from BotFather
 - `TELEGRAM_ALLOWED_USER_IDS` - Comma-separated Telegram user IDs
 
-### 5. Run
+### 4. Run
 
 ```bash
 # Direct
@@ -71,13 +67,12 @@ TELEGRAM_BOT_TOKEN=your-token TELEGRAM_ALLOWED_USER_IDS=123456 python bot.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `FACTORY_API_KEY` | ✅ | - | Your Factory API key ([get one here](https://factory.ai)) |
 | `TELEGRAM_BOT_TOKEN` | ✅ | - | Telegram bot token from @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | - | Comma-separated Telegram user IDs |
-| `DROID_PATH` | ❌ | `droid` | Path to Droid CLI |
-| `DROID_DEFAULT_CWD` | ❌ | `~` | Default working directory |
-| `DROID_LOG_FILE` | ❌ | `/var/log/droid-telegram/bot.log` | Log file path |
-| `DROID_SESSIONS_FILE` | ❌ | `/var/lib/droid-telegram/sessions.json` | Sessions file |
+| `OPENCODE_PATH` | ❌ | `opencode` | Path to OpenCode CLI |
+| `OPENCODE_DEFAULT_CWD` | ❌ | `~` | Default working directory |
+| `OPENCODE_LOG_FILE` | ❌ | `/var/log/opencode-telegram/bot.log` | Log file path |
+| `OPENCODE_SESSIONS_FILE` | ❌ | `/var/lib/opencode-telegram/sessions.json` | Sessions file |
 
 ## Commands
 
@@ -91,12 +86,13 @@ TELEGRAM_BOT_TOKEN=your-token TELEGRAM_ALLOWED_USER_IDS=123456 python bot.py
 | `/auto [level]` | Set autonomy level (off/low/medium/high/unsafe) |
 | `/cwd` | Show current working directory |
 | `/stream` | Toggle live tool updates on/off |
-| `/status` | Bot and Droid status |
+| `/status` | Bot and OpenCode status |
 | `/git [args]` | Run git commands in current directory |
+| `/stop` | Stop currently running process |
 
 ## Autonomy Levels
 
-Control how much freedom Droid has with the `/auto` command:
+Control permissions with the `/auto` command:
 
 | Level | Description |
 |-------|-------------|
@@ -106,41 +102,68 @@ Control how much freedom Droid has with the `/auto` command:
 | `high` | All tools, asks for risky ones |
 | `unsafe` | Skip all permission checks |
 
+> **Note:** OpenCode uses config-based permissions. See `~/.config/opencode/opencode.jsonc` for configuration.
+
 ## Usage Tips
 
 - **Reply to continue** - Reply to any bot message to continue that session
 - **Working directories** - Use `/new ~/projects/myapp` to set context
-- **Live updates** - Watch Droid's progress with streaming enabled (default)
+- **Live updates** - Watch OpenCode's progress with streaming enabled (default)
 - **Autonomy control** - Use `/auto high` to enable tool execution
 - **Permission prompts** - Bot shows Once/Always/Deny buttons for elevated permissions
 
 ## Production Deployment
 
-### systemd Service
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed VPS deployment instructions.
+
+### Quick Deploy with systemd
 
 ```bash
 # Copy service file
-sudo cp droid-telegram.service /etc/systemd/system/
+sudo cp opencode-telegram.service /etc/systemd/system/
 
 # Edit with your environment variables
-sudo systemctl edit droid-telegram
+sudo nano /etc/systemd/system/opencode-telegram.service
 
 # Enable and start
-sudo systemctl enable droid-telegram
-sudo systemctl start droid-telegram
+sudo systemctl enable opencode-telegram
+sudo systemctl start opencode-telegram
+
+# Check status
+sudo systemctl status opencode-telegram
 ```
 
-### Docker (coming soon)
+### Export Config for VPS
 
 ```bash
-docker run -e TELEGRAM_BOT_TOKEN=xxx -e TELEGRAM_ALLOWED_USER_IDS=123 droid-telegram
+# Export your local OpenCode config
+./scripts/export-config.sh ./deploy-config
+
+# Copy to VPS
+scp -r ./deploy-config/* root@your-vps:~/.config/opencode/
 ```
+
+## OpenCode Configuration
+
+The bot uses your OpenCode configuration from `~/.config/opencode/`:
+
+| File | Purpose |
+|------|---------|
+| `opencode.jsonc` | Main config (model, plugins, providers) |
+| `oh-my-opencode.json` | Agent configuration (if using oh-my-opencode) |
+| `antigravity.json` | Antigravity plugin settings |
+| `antigravity-accounts.json` | OAuth tokens (keep secure!) |
 
 ## Security Notes
 
 - **Never commit tokens** - Use environment variables or `.env` files
+- **Protect OAuth tokens** - `antigravity-accounts.json` contains sensitive data
 - **Restrict access** - Always set `TELEGRAM_ALLOWED_USER_IDS`
-- **Review permissions** - The bot can execute commands via Droid
+- **Review permissions** - The bot can execute commands via OpenCode
+
+## Migration from Droid
+
+See [MIGRATION_ROADMAP.md](MIGRATION_ROADMAP.md) for the full migration plan.
 
 ## License
 
