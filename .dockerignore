@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Environment files (secrets should be set via fly secrets)
+.env
+.env.*
+
+# Logs
+*.log
+bot.log
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.ruff_cache
+
+# Local session data
+sessions.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode
+.idea
+
+# Local directories not needed in container
+ink-repo
+mcp-examples
+mcp-sdk
+oh-my-opencode
+opencode-client
+scripts
+
+# Documentation (not needed at runtime)
+*.md
+!README.md
+
+# Service files (for VPS deployment, not Docker)
+*.service

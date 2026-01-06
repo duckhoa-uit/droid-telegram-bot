@@ -1,0 +1,47 @@
+[Unit]
+Description=OpenCode Telegram Bot
+After=network.target opencode-server.service
+Requires=opencode-server.service
+Documentation=https://github.com/duckhoa-uit/droid-telegram-bot
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/opencode-bot
+
+# Environment setup
+Environment="PATH=/home/ubuntu/.opencode/bin:/home/ubuntu/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/ubuntu"
+Environment="XDG_CONFIG_HOME=/home/ubuntu/.config"
+Environment="XDG_DATA_HOME=/home/ubuntu/.local/share"
+Environment="XDG_CACHE_HOME=/home/ubuntu/.cache"
+
+# Load environment from file (recommended)
+EnvironmentFile=/opt/opencode-bot/.env
+
+# Wait for OpenCode server to be ready
+ExecStartPre=/bin/sleep 15
+ExecStartPre=/bin/bash -c 'until curl -s http://127.0.0.1:8080/health > /dev/null 2>&1; do sleep 2; done'
+
+# Start the bot
+ExecStart=/opt/opencode-bot/venv/bin/python bot.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-telegram-bot
+
+# Security hardening (optional, can be enabled for production)
+# NoNewPrivileges=true
+# ProtectSystem=strict
+# ProtectHome=read-only
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

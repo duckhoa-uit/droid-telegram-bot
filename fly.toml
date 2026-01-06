@@ -1,0 +1,18 @@
+app = "opencode-telegram-bot"
+primary_region = "sin"
+
+[build]
+
+[env]
+  OPENCODE_PATH = "/root/.opencode/bin/opencode"
+  OPENCODE_SERVER_URL = "http://127.0.0.1:8080"
+  OPENCODE_SESSIONS_FILE = "/data/sessions/sessions.json"
+  OPENCODE_DEFAULT_CWD = "/app"
+
+[mounts]
+  source = "bot_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -3,6 +3,9 @@
 .env.local
 .env.production
 
+# OpenCode sensitive files (OAuth tokens - these contain secrets!)
+config/opencode/antigravity-accounts.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -24,9 +27,12 @@ ENV/
 *.log
 logs/
 
-# Sessions (may contain sensitive data)
+# Sessions (contains user data)
 sessions.json
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Ruff cache
+.ruff_cache/

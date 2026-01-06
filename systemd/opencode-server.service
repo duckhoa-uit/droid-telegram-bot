@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenCode Server Daemon
+After=network.target
+Documentation=https://opencode.ai/docs
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/opencode-bot
+
+# Environment setup
+Environment="PATH=/home/ubuntu/.opencode/bin:/home/ubuntu/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/ubuntu"
+Environment="XDG_CONFIG_HOME=/home/ubuntu/.config"
+Environment="XDG_DATA_HOME=/home/ubuntu/.local/share"
+Environment="XDG_CACHE_HOME=/home/ubuntu/.cache"
+
+# Server configuration
+ExecStart=/home/ubuntu/.opencode/bin/opencode serve --port 8080
+
+# Restart policy
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-server
+
+[Install]
+WantedBy=multi-user.target

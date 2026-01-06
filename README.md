@@ -8,62 +8,68 @@ A Telegram bot that interfaces with [OpenCode AI Coding Agent](https://opencode.
 - ⚡ **Live Streaming** - Watch tool calls in real-time as OpenCode works
 - 📂 **Session Management** - Persistent sessions with working directory context
 - 🔐 **Access Control** - Restrict bot access to specific Telegram users
-- 🎚️ **Autonomy Levels** - Control permissions (off/low/medium/high/unsafe)
 - 🔧 **Git Integration** - Quick `/git` commands for common operations
-- 🤖 **Multi-Model** - Supports Claude, GPT, Gemini via OpenCode
-
-## Prerequisites
-
-- Python 3.10+
-- [OpenCode](https://opencode.ai) installed and configured
-- Telegram bot token (from [@BotFather](https://t.me/botfather))
-- Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
+- 🚀 **Deploy to Fly.io** - One-command deployment to the cloud
 
 ## Quick Start
 
-### 1. Install OpenCode
+### Option 1: Deploy to Oracle Cloud VPS (Recommended - Free)
+
+Oracle Cloud offers **Always Free** ARM VMs with up to 4 CPUs and 24GB RAM - perfect for this bot.
 
 ```bash
-# Install OpenCode
-curl -fsSL https://opencode.ai/install | bash
-
-# Verify installation
-~/.opencode/bin/opencode --version
-
-# Authenticate (follow OAuth flow)
-~/.opencode/bin/opencode auth
+# SSH into your Oracle VPS, then run:
+curl -fsSL https://raw.githubusercontent.com/duckhoa-uit/droid-telegram-bot/main/scripts/setup-oracle.sh | bash
 ```
 
-### 2. Clone and Install
+See [docs/DEPLOY_ORACLE_VPS.md](docs/DEPLOY_ORACLE_VPS.md) for full instructions.
+
+### Option 2: Deploy to Fly.io
+
+1. **Install Fly CLI**
+   ```bash
+   curl -L https://fly.io/install.sh | sh
+   fly auth login
+   ```
+
+2. **Clone and configure**
+   ```bash
+   git clone https://github.com/duckhoa-uit/droid-telegram-bot.git
+   cd opencode-telegram-bot
+   
+   # Copy your OpenCode config
+   cp ~/.config/opencode/opencode.jsonc config/opencode/
+   # If using Antigravity auth:
+   cp ~/.config/opencode/antigravity.json config/opencode/
+   cp ~/.config/opencode/antigravity-accounts.json config/opencode/
+   ```
+
+3. **Deploy**
+   ```bash
+   fly apps create your-bot-name
+   fly volumes create bot_data --size 1 --region sin
+   fly secrets set TELEGRAM_BOT_TOKEN="your-bot-token"
+   fly secrets set TELEGRAM_ALLOWED_USER_IDS="your-telegram-id"
+   fly deploy
+   ```
+
+### Option 3: Run Locally
 
 ```bash
-git clone https://github.com/duckhoa-uit/opencode-telegram-bot.git
-cd opencode-telegram-bot
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Configure Environment
-
-```bash
+# Configure
 cp .env.example .env
 # Edit .env with your values
-```
 
-Required environment variables:
-- `TELEGRAM_BOT_TOKEN` - Your bot token from BotFather
-- `TELEGRAM_ALLOWED_USER_IDS` - Comma-separated Telegram user IDs
-
-### 4. Run
-
-```bash
-# Direct
+# Run
 python bot.py
-
-# Or with environment variables inline
-TELEGRAM_BOT_TOKEN=your-token TELEGRAM_ALLOWED_USER_IDS=123456 python bot.py
 ```
 
-## Environment Variables
+## Configuration
+
+### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -71,102 +77,76 @@ TELEGRAM_BOT_TOKEN=your-token TELEGRAM_ALLOWED_USER_IDS=123456 python bot.py
 | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | - | Comma-separated Telegram user IDs |
 | `OPENCODE_PATH` | ❌ | `opencode` | Path to OpenCode CLI |
 | `OPENCODE_DEFAULT_CWD` | ❌ | `~` | Default working directory |
-| `OPENCODE_SERVER_URL` | ❌ | `http://127.0.0.1:8080` | OpenCode server URL for HTTP API mode |
-| `OPENCODE_MODEL_PROVIDER` | ❌ | `anthropic` | Model provider for API mode |
-| `OPENCODE_MODEL` | ❌ | `claude-sonnet-4-20250514` | Model ID for API mode |
-| `OPENCODE_LOG_FILE` | ❌ | `./bot.log` | Log file path |
-| `OPENCODE_SESSIONS_FILE` | ❌ | `./sessions.json` | Sessions file |
+| `OPENCODE_SERVER_URL` | ❌ | `http://127.0.0.1:8080` | OpenCode server URL |
+
+### OpenCode Config
+
+Copy your OpenCode configuration to `config/opencode/`:
+
+```
+config/opencode/
+├── opencode.jsonc          # Main config (model, plugins)
+├── antigravity.json        # Antigravity settings (optional)
+└── antigravity-accounts.json # OAuth tokens (optional, gitignored)
+```
+
+See [config/opencode/README.md](config/opencode/README.md) for configuration examples.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Welcome message and quick help |
+| `/start` | Welcome message |
 | `/help` | Detailed help |
-| `/new [path]` | Start new session (optionally in directory) |
-| `/session` | List recent sessions |
-| `/session <id>` | Switch to a session |
-| `/auto [level]` | Set autonomy level (off/low/medium/high/unsafe) |
-| `/cwd` | Show current working directory |
-| `/stream` | Toggle live tool updates on/off |
-| `/status` | Bot and OpenCode status |
-| `/git [args]` | Run git commands in current directory |
-| `/stop` | Stop currently running process |
+| `/new [path]` | Start new session |
+| `/session` | List sessions |
+| `/session <id>` | Switch to session |
+| `/cwd` | Show working directory |
+| `/stream` | Toggle live updates |
+| `/status` | Bot status |
+| `/git [args]` | Run git commands |
+| `/stop` | Stop running process |
 
-## Autonomy Levels
+## Project Structure
 
-Control permissions with the `/auto` command:
-
-| Level | Description |
-|-------|-------------|
-| `off` | Read-only mode (default) - no tool execution |
-| `low` | Safe tools only |
-| `medium` | Most tools allowed |
-| `high` | All tools, asks for risky ones |
-| `unsafe` | Skip all permission checks |
-
-> **Note:** OpenCode uses config-based permissions. See `~/.config/opencode/opencode.jsonc` for configuration.
-
-## Usage Tips
-
-- **Reply to continue** - Reply to any bot message to continue that session
-- **Working directories** - Use `/new ~/projects/myapp` to set context
-- **Live updates** - Watch OpenCode's progress with streaming enabled (default)
-- **Autonomy control** - Use `/auto high` to enable tool execution
-- **Permission prompts** - Bot shows Once/Always/Deny buttons for elevated permissions
-
-## Production Deployment
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed VPS deployment instructions.
-
-### Quick Deploy with systemd
-
-```bash
-# Copy service file
-sudo cp opencode-telegram.service /etc/systemd/system/
-
-# Edit with your environment variables
-sudo nano /etc/systemd/system/opencode-telegram.service
-
-# Enable and start
-sudo systemctl enable opencode-telegram
-sudo systemctl start opencode-telegram
-
-# Check status
-sudo systemctl status opencode-telegram
 ```
-
-### Export Config for VPS
-
-```bash
-# Export your local OpenCode config
-./scripts/export-config.sh ./deploy-config
-
-# Copy to VPS
-scp -r ./deploy-config/* root@your-vps:~/.config/opencode/
+droid-telegram-bot/
+├── bot.py              # Main bot application
+├── requirements.txt    # Python dependencies
+├── Dockerfile          # Container build (Fly.io)
+├── fly.toml            # Fly.io configuration
+├── start.sh            # Container startup script
+├── config/
+│   └── opencode/       # OpenCode configuration
+├── docs/
+│   └── DEPLOY_ORACLE_VPS.md  # Oracle Cloud deployment guide
+├── scripts/
+│   └── setup-oracle.sh # Oracle VPS setup script
+├── systemd/
+│   ├── opencode-server.service        # OpenCode server service
+│   └── opencode-telegram-bot.service  # Bot service
+└── .env.example        # Environment template
 ```
-
-## OpenCode Configuration
-
-The bot uses your OpenCode configuration from `~/.config/opencode/`:
-
-| File | Purpose |
-|------|---------|
-| `opencode.jsonc` | Main config (model, plugins, providers) |
-| `oh-my-opencode.json` | Agent configuration (if using oh-my-opencode) |
-| `antigravity.json` | Antigravity plugin settings |
-| `antigravity-accounts.json` | OAuth tokens (keep secure!) |
 
 ## Security Notes
 
-- **Never commit tokens** - Use environment variables or `.env` files
-- **Protect OAuth tokens** - `antigravity-accounts.json` contains sensitive data
+- **Never commit tokens** - Use environment variables or Fly secrets
+- **Protect OAuth tokens** - `antigravity-accounts.json` is gitignored
 - **Restrict access** - Always set `TELEGRAM_ALLOWED_USER_IDS`
-- **Review permissions** - The bot can execute commands via OpenCode
 
-## Migration from Droid
+## Getting Your IDs
 
-See [MIGRATION_ROADMAP.md](MIGRATION_ROADMAP.md) for the full migration plan.
+- **Telegram Bot Token**: Message [@BotFather](https://t.me/botfather) and create a bot
+- **Your Telegram ID**: Message [@userinfobot](https://t.me/userinfobot)
+
+## Deployment Comparison
+
+| Platform | RAM | CPU | Storage | Monthly Cost |
+|----------|-----|-----|---------|--------------|
+| **Oracle Cloud (Free)** | Up to 24GB | 4 ARM cores | 200GB | **$0** |
+| Fly.io | 512MB-2GB | Shared | 1GB | $5-15 |
+| Railway | 512MB-8GB | Variable | 1GB | $5-20 |
+| DigitalOcean | 1GB | 1 vCPU | 25GB | $6 |
 
 ## License
 
