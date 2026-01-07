@@ -1,16 +1,16 @@
 #!/bin/bash
 #
-# OpenCode Telegram Bot - Oracle VPS Setup Script
+# OpenCode Telegram Bot - VPS Setup Script
 # 
-# Usage: curl -fsSL https://raw.githubusercontent.com/duckhoa-uit/droid-telegram-bot/main/scripts/setup-oracle.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/duckhoa-uit/droid-telegram-bot/main/scripts/setup-vps.sh | bash
 #
-# This script sets up the OpenCode Telegram Bot on an Oracle Cloud VPS (Ubuntu)
+# This script sets up the OpenCode Telegram Bot on any Ubuntu/Debian VPS
 #
 
 set -e
 
 echo "=========================================="
-echo "OpenCode Telegram Bot - Oracle VPS Setup"
+echo "OpenCode Telegram Bot - VPS Setup"
 echo "=========================================="
 
 # Colors for output
@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}Please do not run this script as root. Run as ubuntu user.${NC}"
+    echo -e "${RED}Please do not run this script as root. Run as your regular user.${NC}"
     exit 1
 fi
 

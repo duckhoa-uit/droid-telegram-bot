@@ -13,16 +13,16 @@ A Telegram bot that interfaces with [OpenCode AI Coding Agent](https://opencode.
 
 ## Quick Start
 
-### Option 1: Deploy to Oracle Cloud VPS (Recommended - Free)
+### Option 1: Deploy to a VPS (Recommended)
 
-Oracle Cloud offers **Always Free** ARM VMs with up to 4 CPUs and 24GB RAM - perfect for this bot.
+Deploy to any Ubuntu/Debian VPS with a one-liner:
 
 ```bash
-# SSH into your Oracle VPS, then run:
-curl -fsSL https://raw.githubusercontent.com/duckhoa-uit/droid-telegram-bot/main/scripts/setup-oracle.sh | bash
+# SSH into your VPS, then run:
+curl -fsSL https://raw.githubusercontent.com/duckhoa-uit/droid-telegram-bot/main/scripts/setup-vps.sh | bash
 ```
 
-See [docs/DEPLOY_ORACLE_VPS.md](docs/DEPLOY_ORACLE_VPS.md) for full instructions.
+See [docs/DEPLOY_VPS.md](docs/DEPLOY_VPS.md) for full instructions.
 
 ### Option 2: Deploy to Fly.io
 
@@ -119,9 +119,9 @@ droid-telegram-bot/
 ├── config/
 │   └── opencode/       # OpenCode configuration
 ├── docs/
-│   └── DEPLOY_ORACLE_VPS.md  # Oracle Cloud deployment guide
+│   └── DEPLOY_VPS.md         # VPS deployment guide
 ├── scripts/
-│   └── setup-oracle.sh # Oracle VPS setup script
+│   └── setup-vps.sh          # VPS setup script
 ├── systemd/
 │   ├── opencode-server.service        # OpenCode server service
 │   └── opencode-telegram-bot.service  # Bot service
@@ -143,9 +143,9 @@ droid-telegram-bot/
 
 | Platform | RAM | CPU | Storage | Monthly Cost |
 |----------|-----|-----|---------|--------------|
-| **Oracle Cloud (Free)** | Up to 24GB | 4 ARM cores | 200GB | **$0** |
+| Oracle Cloud (Free Tier) | Up to 24GB | 4 ARM cores | 200GB | **$0** |
+| Hetzner | 2GB | 1 vCPU | 20GB | €3.79 |
 | Fly.io | 512MB-2GB | Shared | 1GB | $5-15 |
-| Railway | 512MB-8GB | Variable | 1GB | $5-20 |
 | DigitalOcean | 1GB | 1 vCPU | 25GB | $6 |
 
 ## License
