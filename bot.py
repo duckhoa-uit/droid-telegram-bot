@@ -1505,12 +1505,18 @@ def extract_session_id(line):
             pass
     return None
 
-async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off", user_id=None, retry_without_session=False, retry_without_server=False, use_api=True):
-    """Handle message with streaming tool updates. Returns (response, session_id)"""
+async def handle_message_streaming(user_message, session_id, status_msg, cwd=None, autonomy_level="off", user_id=None, retry_without_session=False, retry_without_server=False, use_api=False):
+    """Handle message with streaming tool updates. Returns (response, session_id)
+    
+    Note: use_api=False by default because:
+    1. HTTP API doesn't support per-session working directories
+    2. CLI mode provides real streaming with tool call updates
+    """
     
     working_dir = cwd or DEFAULT_CWD
     
-    # Try HTTP API first if server is available and we haven't been told to skip it
+    # Try HTTP API first if explicitly enabled and server is available
+    # DISABLED: API mode doesn't support working directories and SSE streaming is unreliable
     if use_api and not retry_without_server and is_server_available():
         logger.info(f"Using HTTP API mode for message (server available)")
         try:
