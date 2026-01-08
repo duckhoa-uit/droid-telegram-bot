@@ -271,9 +271,12 @@ class OpenCodeAPIClient:
                 res = await client.post(f"/session/{session_id}/message", json=message)
                 res.raise_for_status()
                 response_text = res.text
+                logger.info(f"API response length: {len(response_text)} chars")
                 if not response_text or not response_text.strip():
+                    logger.warning("API returned empty response body")
                     raise ValueError("Empty response from server")
                 data = res.json()
+                logger.debug(f"API response keys: {list(data.keys())}")
                 
                 # Process the final response
                 response_parts = data.get("parts", [])
