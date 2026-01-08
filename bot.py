@@ -373,12 +373,20 @@ def get_server_status():
         return False, str(e)
     return False, "Unknown error"
 
-def build_opencode_command(session_id=None, use_server=True):
-    """Build OpenCode command with optional --attach flag for server mode"""
+def build_opencode_command(session_id=None, use_server=True, working_dir=None):
+    """Build OpenCode command with optional --attach flag for server mode
+    
+    Note: When working_dir differs from DEFAULT_CWD, we skip --attach because
+    the daemon server uses its own cwd (/opt/opencode-bot) and ignores the CLI's cwd.
+    """
     cmd = [OPENCODE_PATH, "run"]
     
-    # Add --attach flag if server is available
-    if use_server and is_server_available():
+    # Don't use --attach if we need a custom working directory
+    # The daemon server runs in DEFAULT_CWD and ignores the CLI's cwd
+    needs_custom_cwd = working_dir and working_dir != DEFAULT_CWD
+    
+    # Add --attach flag if server is available AND we don't need custom cwd
+    if use_server and not needs_custom_cwd and is_server_available():
         cmd.extend(["--attach", OPENCODE_SERVER_URL])
     
     cmd.extend(["--format", "json"])
@@ -1108,7 +1116,7 @@ async def handle_message_streaming_unsafe(user_message, session_id, status_msg, 
     
     # Build OpenCode command with optional server attachment
     # For unsafe mode, we rely on the opencode.json permissions config
-    cmd = build_opencode_command(session_id, use_server=True)
+    cmd = build_opencode_command(session_id, use_server=True, working_dir=working_dir)
     
     # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
@@ -1538,7 +1546,7 @@ async def handle_message_streaming(user_message, session_id, status_msg, cwd=Non
     # If retrying, don't pass the session_id to start fresh
     effective_session_id = None if retry_without_session else session_id
     use_server = not retry_without_server  # Disable server mode if retrying without it
-    cmd = build_opencode_command(effective_session_id, use_server=use_server)
+    cmd = build_opencode_command(effective_session_id, use_server=use_server, working_dir=working_dir)
     if effective_session_id:
         logger.info(f"Continuing session: {effective_session_id}")
     elif retry_without_session and session_id:
@@ -1771,7 +1779,7 @@ async def handle_message_simple(user_message, session_id, cwd=None, autonomy_lev
     env = os.environ.copy()
     
     # Build OpenCode command with optional server attachment
-    cmd = build_opencode_command(session_id, use_server=True)
+    cmd = build_opencode_command(session_id, use_server=True, working_dir=working_dir)
     
     # Add bot context on first message of session so OpenCode knows about /new command
     message_with_context = BOT_CONTEXT + user_message if not session_id else user_message
