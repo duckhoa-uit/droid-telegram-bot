@@ -182,6 +182,8 @@ class OpenCodeAPIClient:
             if working_dir:
                 headers["x-opencode-directory"] = working_dir
             
+            logger.info(f"SSE: Connecting to {sse_url}")
+            
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(sse_url, headers=headers, timeout=aiohttp.ClientTimeout(total=self.timeout)) as response:
@@ -190,11 +192,13 @@ class OpenCodeAPIClient:
                             sse_connected.set()  # Signal that we tried
                             return
                         
+                        logger.info(f"SSE: Connected successfully (status {response.status})")
                         sse_connected.set()  # Signal SSE is connected
                         
                         # Read SSE events line by line
                         async for line in response.content:
                             if message_complete.is_set():
+                                logger.debug("SSE: Message complete, stopping listener")
                                 break
                             
                             line = line.decode('utf-8').strip()
@@ -212,6 +216,8 @@ class OpenCodeAPIClient:
                                     event_type = event_data.get("type", "")
                                     properties = event_data.get("properties", {})
                                     
+                                    logger.debug(f"SSE event: {event_type}")
+                                    
                                     # Handle message.updated events for tool calls
                                     if event_type == "message.updated":
                                         msg_info = properties
@@ -222,6 +228,7 @@ class OpenCodeAPIClient:
                                             
                                             # Tool invocation updates
                                             if part_type == "tool":
+                                                logger.info(f"SSE: Tool call - {part.get('tool', 'unknown')}")
                                                 tool_calls.append(part)
                                                 if on_tool_use:
                                                     await on_tool_use(part)
@@ -235,6 +242,7 @@ class OpenCodeAPIClient:
                                     # Handle session status events
                                     elif event_type == "session.status":
                                         status = properties.get("status", "")
+                                        logger.debug(f"SSE: Session status - {status}")
                                         if status in ["idle", "completed", "error"]:
                                             # Session finished processing
                                             pass
@@ -243,7 +251,7 @@ class OpenCodeAPIClient:
                                     continue
                                     
             except asyncio.CancelledError:
-                pass
+                logger.debug("SSE: Listener cancelled")
             except Exception as e:
                 logger.warning(f"SSE listener error: {e}")
                 sse_connected.set()  # Ensure we don't hang
