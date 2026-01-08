@@ -21,6 +21,7 @@ import urllib.request
 import urllib.error
 import asyncio
 import httpx
+import aiohttp
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
@@ -147,13 +148,16 @@ class OpenCodeAPIClient:
         self, 
         session_id: str, 
         text: str, 
+        working_dir: str = None,
         system_prompt: str = None,
         on_tool_use=None,
         on_text=None,
-        on_error=None
+        on_error=None,
+        on_complete=None
     ) -> tuple[str, list]:
         """
-        Send a message and process response with callbacks for streaming updates.
+        Send a message with real-time SSE streaming updates.
+        Connects to /event SSE endpoint for live tool call updates.
         Returns (final_text, tool_calls_list)
         """
         parts = [{"type": "text", "text": text}]
@@ -167,46 +171,142 @@ class OpenCodeAPIClient:
         
         final_text = ""
         tool_calls = []
+        message_complete = asyncio.Event()
+        sse_connected = asyncio.Event()
         
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
-            res = await client.post(f"/session/{session_id}/message", json=message)
-            res.raise_for_status()
-            response_text = res.text
-            if not response_text or not response_text.strip():
-                raise ValueError("Empty response from server")
-            data = res.json()
+        # SSE listener task - connects to /event endpoint for real-time updates
+        async def listen_sse():
+            nonlocal final_text, tool_calls
+            sse_url = f"{self.base_url}/event"
+            headers = {}
+            if working_dir:
+                headers["x-opencode-directory"] = working_dir
             
-            # Process the response parts
-            response_parts = data.get("parts", [])
-            for part in response_parts:
-                part_type = part.get("type", "")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(sse_url, headers=headers, timeout=aiohttp.ClientTimeout(total=self.timeout)) as response:
+                        if response.status != 200:
+                            logger.warning(f"SSE connection failed: {response.status}")
+                            sse_connected.set()  # Signal that we tried
+                            return
+                        
+                        sse_connected.set()  # Signal SSE is connected
+                        
+                        # Read SSE events line by line
+                        async for line in response.content:
+                            if message_complete.is_set():
+                                break
+                            
+                            line = line.decode('utf-8').strip()
+                            if not line or line.startswith(':'):
+                                continue
+                            
+                            # Parse SSE format: "data: {...}"
+                            if line.startswith('data:'):
+                                data_str = line[5:].strip()
+                                if not data_str:
+                                    continue
+                                
+                                try:
+                                    event_data = json.loads(data_str)
+                                    event_type = event_data.get("type", "")
+                                    properties = event_data.get("properties", {})
+                                    
+                                    # Handle message.updated events for tool calls
+                                    if event_type == "message.updated":
+                                        msg_info = properties
+                                        msg_parts = msg_info.get("parts", [])
+                                        
+                                        for part in msg_parts:
+                                            part_type = part.get("type", "")
+                                            
+                                            # Tool invocation updates
+                                            if part_type == "tool":
+                                                tool_calls.append(part)
+                                                if on_tool_use:
+                                                    await on_tool_use(part)
+                                            
+                                            # Text content updates
+                                            elif part_type == "text":
+                                                text_content = part.get("text", "")
+                                                if text_content and on_text:
+                                                    await on_text(text_content)
+                                    
+                                    # Handle session status events
+                                    elif event_type == "session.status":
+                                        status = properties.get("status", "")
+                                        if status in ["idle", "completed", "error"]:
+                                            # Session finished processing
+                                            pass
+                                    
+                                except json.JSONDecodeError:
+                                    continue
+                                    
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"SSE listener error: {e}")
+                sse_connected.set()  # Ensure we don't hang
+        
+        # Start SSE listener
+        sse_task = asyncio.create_task(listen_sse())
+        
+        try:
+            # Wait briefly for SSE connection to establish
+            try:
+                await asyncio.wait_for(sse_connected.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("SSE connection timeout, proceeding without streaming")
+            
+            # Send the message via HTTP POST
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+                res = await client.post(f"/session/{session_id}/message", json=message)
+                res.raise_for_status()
+                response_text = res.text
+                if not response_text or not response_text.strip():
+                    raise ValueError("Empty response from server")
+                data = res.json()
                 
-                if part_type == "text":
-                    text_content = part.get("text", "")
-                    if text_content:
-                        final_text += text_content
-                        if on_text:
-                            await on_text(text_content)
+                # Process the final response
+                response_parts = data.get("parts", [])
+                for part in response_parts:
+                    part_type = part.get("type", "")
+                    
+                    if part_type == "text":
+                        text_content = part.get("text", "")
+                        if text_content:
+                            final_text += text_content
+                    
+                    elif part_type == "tool-invocation" or part_type == "tool_use" or part_type == "tool":
+                        # Don't add duplicates from SSE
+                        pass
+                    
+                    elif part_type == "error":
+                        error_msg = part.get("message", "") or part.get("error", "Unknown error")
+                        if on_error:
+                            await on_error(error_msg)
+                        final_text = f"Error: {error_msg}"
                 
-                elif part_type == "tool-invocation" or part_type == "tool_use":
-                    tool_calls.append(part)
-                    if on_tool_use:
-                        await on_tool_use(part)
-                
-                elif part_type == "error":
-                    error_msg = part.get("message", "") or part.get("error", "Unknown error")
+                # Check for error in info
+                info = data.get("info", {})
+                if "error" in info and info["error"]:
+                    error_msg = str(info["error"])
                     if on_error:
                         await on_error(error_msg)
-                    final_text = f"Error: {error_msg}"
+                    if not final_text:
+                        final_text = f"Error: {error_msg}"
+                
+                if on_complete:
+                    await on_complete()
             
-            # Also check for error in info
-            info = data.get("info", {})
-            if "error" in info and info["error"]:
-                error_msg = str(info["error"])
-                if on_error:
-                    await on_error(error_msg)
-                if not final_text:
-                    final_text = f"Error: {error_msg}"
+        finally:
+            # Signal SSE listener to stop and clean up
+            message_complete.set()
+            sse_task.cancel()
+            try:
+                await sse_task
+            except asyncio.CancelledError:
+                pass
         
         return final_text, tool_calls
 
@@ -1180,49 +1280,77 @@ def format_opencode_tool_call(part):
         return f"{status_icon} {tool_name}".strip()
 
 def format_api_tool_call(part):
-    """Format a tool call from API response for display"""
-    # API response format differs slightly - handle both formats
+    """Format a tool call from API/SSE response for display"""
+    # Handle various formats from API and SSE events
     tool_name = part.get("toolName", "") or part.get("tool", "") or part.get("name", "unknown")
     
+    # Get status for SSE events
+    state = part.get("state", {})
+    status = state.get("status", "") if state else ""
+    
     # Get input/args from various possible locations
-    input_data = part.get("args", {}) or part.get("input", {}) or part.get("state", {}).get("input", {})
+    input_data = part.get("args", {}) or part.get("input", {}) or state.get("input", {})
     if isinstance(input_data, str):
         try:
             input_data = json.loads(input_data)
         except:
             input_data = {}
     
+    # Get title from state if available (SSE often provides a title)
+    title = state.get("title", "") if state else ""
+    
     detail = ""
     tool_lower = tool_name.lower()
     
-    if tool_lower == "bash":
-        cmd = input_data.get("command", "")
+    # Use title if available (most descriptive)
+    if title:
+        detail = title[:45] + "..." if len(title) > 45 else title
+    elif tool_lower == "bash":
+        cmd = input_data.get("command", "") or input_data.get("cmd", "")
         if cmd:
             detail = cmd[:40] + "..." if len(cmd) > 40 else cmd
-    elif tool_lower in ["read", "write", "edit"]:
-        file_path = input_data.get("path", "") or input_data.get("file", "")
+    elif tool_lower in ["read", "write", "edit", "create_file", "edit_file"]:
+        file_path = input_data.get("path", "") or input_data.get("file", "") or input_data.get("file_path", "")
         if file_path:
             if len(file_path) > 50:
                 detail = "..." + file_path[-47:]
             else:
                 detail = file_path
     elif tool_lower == "glob":
-        pattern = input_data.get("pattern", "")
+        pattern = input_data.get("pattern", "") or input_data.get("filePattern", "")
         if pattern:
             detail = pattern[:40] + "..." if len(pattern) > 40 else pattern
     elif tool_lower == "grep":
         pattern = input_data.get("pattern", "")
         if pattern:
             detail = f"'{pattern[:25]}...'" if len(pattern) > 25 else f"'{pattern}'"
+    elif tool_lower == "web_search":
+        query = input_data.get("query", "") or input_data.get("objective", "")
+        if query:
+            detail = f"'{query[:30]}...'" if len(query) > 30 else f"'{query}'"
+    elif tool_lower == "task":
+        desc = input_data.get("description", "")
+        if desc:
+            detail = desc[:40] + "..." if len(desc) > 40 else desc
+    
+    # Status emoji
+    if status == "completed":
+        status_emoji = "✓"
+    elif status == "running":
+        status_emoji = "⏳"
+    elif status == "error":
+        status_emoji = "❌"
+    else:
+        status_emoji = "→"
     
     if detail:
-        return f"→ {tool_name}: {detail}"
+        return f"{status_emoji} {tool_name}: {detail}"
     else:
-        return f"→ {tool_name}"
+        return f"{status_emoji} {tool_name}"
 
 async def handle_message_via_api(user_message, session_id, status_msg, cwd=None, user_id=None):
     """
-    Handle message using HTTP API to OpenCode server.
+    Handle message using HTTP API to OpenCode server with SSE streaming.
     Returns (response, session_id)
     """
     client = get_api_client()
@@ -1234,6 +1362,9 @@ async def handle_message_via_api(user_message, session_id, status_msg, cwd=None,
     new_session_id = session_id
     tool_updates = []
     last_update = ""
+    last_update_time = 0
+    seen_tool_ids = set()  # Track seen tool calls to avoid duplicates
+    MIN_UPDATE_INTERVAL = 1.0  # Telegram rate limit: ~1 edit/second
     
     try:
         # If no session, create one first
@@ -1243,27 +1374,47 @@ async def handle_message_via_api(user_message, session_id, status_msg, cwd=None,
             new_session_id = session_data.get("id")
             logger.info(f"Created session: {new_session_id}")
         
-        # Callback for tool updates
+        # Callback for tool updates with rate limiting
         async def on_tool_use(part):
-            nonlocal last_update
+            nonlocal last_update, last_update_time, seen_tool_ids
+            
+            # Deduplicate tool calls by ID or callID
+            tool_id = part.get("id") or part.get("callID") or part.get("tool", "") + str(len(tool_updates))
+            if tool_id in seen_tool_ids:
+                return
+            seen_tool_ids.add(tool_id)
+            
             tool_display = format_api_tool_call(part)
             tool_updates.append(tool_display)
             display_tools = tool_updates[-5:]
             session_indicator = " (continuing)" if session_id else ""
-            new_status = f"Working...{session_indicator}\n\n" + "\n".join(display_tools)
-            if new_status != last_update:
+            new_status = f"🔄 Working...{session_indicator}\n\n" + "\n".join(display_tools)
+            
+            # Rate limit Telegram updates to ~1/second
+            current_time = time.time()
+            if new_status != last_update and (current_time - last_update_time) >= MIN_UPDATE_INTERVAL:
                 try:
                     await status_msg.edit_text(new_status)
                     last_update = new_status
-                except:
-                    pass
+                    last_update_time = current_time
+                except Exception as e:
+                    logger.debug(f"Failed to update status: {e}")
         
-        logger.info(f"Sending message via API to session {new_session_id}")
+        logger.info(f"Sending message via API with SSE streaming to session {new_session_id}")
         final_text, tool_calls = await client.send_message_streaming(
             session_id=new_session_id,
             text=message_with_context,
+            working_dir=working_dir,
             on_tool_use=on_tool_use
         )
+        
+        # Final update to show completion
+        if tool_updates:
+            try:
+                final_status = f"✅ Completed\n\n" + "\n".join(tool_updates[-5:])
+                await status_msg.edit_text(final_status)
+            except:
+                pass
         
         return final_text.strip(), new_session_id
         
