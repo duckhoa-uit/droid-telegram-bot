@@ -119,7 +119,8 @@ droid-telegram-bot/
 ├── config/
 │   └── opencode/       # OpenCode configuration
 ├── docs/
-│   └── DEPLOY_VPS.md         # VPS deployment guide
+│   ├── DEPLOY_VPS.md         # VPS deployment guide
+│   └── SYNCTHING_SETUP.md    # Sync local ↔ VPS repos
 ├── scripts/
 │   └── setup-vps.sh          # VPS setup script
 ├── systemd/
